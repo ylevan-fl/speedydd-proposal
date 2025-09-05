@@ -17,10 +17,10 @@ The Speedydd API Service is a comprehensive integration hub designed to enable s
 > **API Key Structure**
 > 
 > Each API key consists of two components:
-> - **`app_id`**: Unique identifier for the application integrating with Speedydd API
+> - **`org_id`**: Unique identifier for the organization integrating with Speedydd API
 > - **`api_key`**: Generated secret key for authentication
 > 
-> Example format: `app_id: "app_12345"` + `api_key: "sk_live_abc123def456"`
+> Example format: `org_id: "org_12345"` + `api_key: "sk_live_abc123def456"`
 > 
 > Both values are required in API requests for authentication.
 
@@ -37,42 +37,56 @@ The Speedydd API Service is a comprehensive integration hub designed to enable s
 > - This will include proper onboarding workflows, key rotation, and usage monitoring
 > - The implementation timeline will be communicated as we progress through Phase 1 
 
-## Interacting App
+## Interacting Organization
 
-### App Registration Requirements
+### Organization Registration Requirements
 
-Every application must be registered in our system before accessing the Speedydd API.
+Every organization must be registered in our system before accessing the Speedydd API.
 
 > [!IMPORTANT]
-> **Manual App Creation (Phase 1)**
+> **Manual Organization Creation (Phase 1)**
 > 
-> Currently, we manually create applications for our first clients (Pay Solo)
+> Currently, we manually create organizations for our first clients (Pay Solo)
 >
-> **Future Implementation**: We will develop an automated application creation system that allows clients to self-register and manage their API credentials through a dedicated portal. 
+> **Future Implementation**: We will develop an automated organization creation system that allows clients to self-register and manage their API credentials through a dedicated portal. 
 
 
-### App Entity
+### Organization Entity
 
 ```mermaid
 erDiagram
-    App {
+    organizations {
         number id PK "Primary Key - Auto Increment"
-        string name "Application Name"
+        string name "Organization Name"
         string secret "Generated Secret Key"
+        string speed_organization_id "MongoDB Organization ID"
         date createdAt "Creation Timestamp"
         date updatedAt "Last Update Timestamp"
     }
 ```
 
-**App Entity Fields:**
+**Organizations Entity Fields:**
 
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
 | `id` | number | Primary key, auto-incrementing unique identifier | NOT NULL, PRIMARY KEY, AUTO_INCREMENT |
-| `name` | string | Human-readable name of the application | NOT NULL, UNIQUE, VARCHAR(255) |
+| `name` | string | Human-readable name of the organization | NOT NULL, UNIQUE, VARCHAR(255) |
 | `secret` | string | Cryptographically secure random secret for API authentication | NOT NULL, VARCHAR(512) |
-| `createdAt` | date | Timestamp when the app was created | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
-| `updatedAt` | date | Timestamp when the app was last modified | NOT NULL, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP |
+| `speed_organization_id` | string | MongoDB organization ID from legacy database | NOT NULL, UNIQUE, VARCHAR(100) |
+| `createdAt` | date | Timestamp when the organization was created | NOT NULL, DEFAULT CURRENT_TIMESTAMP |
+| `updatedAt` | date | Timestamp when the organization was last modified | NOT NULL, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP |
+
+> [!CAUTION]
+> **Database Migration & Linking**
+> 
+> Since the new Speedydd API project uses PostgreSQL while the existing Speedydd application uses MongoDB, we need to link organizations between the two systems:
+> 
+> - **`speed_organization_id`**: Contains the MongoDB ObjectId from the legacy database
+> - **Purpose**: Enables data correlation and migration between old and new systems
+> - **Migration Strategy**: Organizations will be created in PostgreSQL with their corresponding MongoDB IDs
+> - **Data Integrity**: Ensures seamless integration during the transition period
+> 
+> This linking approach allows the API to reference existing organization data while maintaining separation between the two database systems.
 
 > [!TIP]
 > **Generating Secure Random Secrets**
@@ -97,18 +111,18 @@ erDiagram
 
 ## Authentication
 
-All API requests require authentication using `X-App-ID` and `X-API-Key` headers. These credentials are provided when your application is registered in our system.
+All API requests require authentication using `X-Org-ID` and `X-API-Key` headers. These credentials are provided when your organization is registered in our system.
 
 **Required Headers:**
-- `X-App-ID`: Your application identifier
+- `X-Org-ID`: Your organization identifier
 - `X-API-Key`: Your signed authentication token
 
 ### API Key Retrieval
 
-When an app requests their API key, we use our private key to sign the app secret and return it as the API key.
+When an organization requests their API key, we use our private key to sign the organization secret and return it as the API key.
 
 **Process:**
-1. Retrieve app secret from database using app ID
+1. Retrieve organization secret from database using organization ID
 2. Create token containing only the `secret`
 3. Encrypt the token using AES-256
 4. Sign the encrypted token with our RSA private key
@@ -134,21 +148,21 @@ function generateApiKey(secret) {
 > **Current Implementation (Phase 1)**
 > 
 > Currently, we are implementing this API key system for only 1 client (Pay Solo). We will manually:
-> - Retrieve the app secret from our database
+> - Retrieve the organization secret from our database
 > - Generate the signed API key using our private key
 > - Deliver the API key directly to Pay Solo
 > 
-> **Future Implementation**: We will develop automated API key generation and retrieval endpoints that allow clients to request their API keys programmatically.
+> **Future Implementation**: We will develop automated API key generation and retrieval endpoints that allow organizations to request their API keys programmatically.
 
 ### Authentication Request
 
 When users make API requests, we use our public key to verify the API key signature.
 
 **Process:**
-1. Extract `X-App-ID` and `X-API-Key` from request headers
+1. Extract `X-Org-ID` and `X-API-Key` from request headers
 2. Use public key to verify the signature of the API key
 3. If signature is valid, decrypt the token to get the secret
-4. Compare the secret with the stored secret for that app ID
+4. Compare the secret with the stored secret for that organization ID
 5. Allow request if verification passes, return 401 if it fails
 
 **Example:**
@@ -156,7 +170,7 @@ When users make API requests, we use our public key to verify the API key signat
 const crypto = require('crypto');
 
 // Verify API key
-function verifyApiKey(apiKey, appId) {
+function verifyApiKey(apiKey, orgId) {
   try {
     // Verify signature with public key
     const isValid = crypto.verify('sha256', apiKey, publicKey, signature);
@@ -166,8 +180,8 @@ function verifyApiKey(apiKey, appId) {
       const decrypted = crypto.publicDecrypt(publicKey, apiKey);
       const secret = decrypted.toString();
       
-      // Verify secret matches stored secret for app ID
-      return verifySecret(secret, appId);
+      // Verify secret matches stored secret for organization ID
+      return verifySecret(secret, orgId);
     }
     
     return false;
@@ -194,18 +208,18 @@ function verifyApiKey(apiKey, appId) {
 
 ## Rate Limiting Implementation
 
-We implement quota limits using Redis INCR to track API usage per app key with daily request limits.
+We implement quota limits using Redis INCR to track API usage per organization key with daily request limits.
 
 ### Implementation Details
 
 **Redis Key Structure:**
 ```
-quota:{app_id}:{date} = request_count
+quota:{org_id}:{date} = request_count
 ```
 
 **Example:**
 ```
-quota:app_12345:2024-01-15 = 150
+quota:org_12345:2024-01-15 = 150
 ```
 
 ### Middleware Implementation
@@ -216,9 +230,9 @@ const client = redis.createClient();
 
 // Quota limit middleware
 async function quotaLimitMiddleware(req, res, next) {
-  const appId = req.headers['x-app-id'];
+  const orgId = req.headers['x-org-id'];
   const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-  const quotaKey = `quota:${appId}:${today}`;
+  const quotaKey = `quota:${orgId}:${today}`;
   
   try {
     // Get current count and increment
