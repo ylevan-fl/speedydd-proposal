@@ -294,3 +294,178 @@ export class QuotaGuard implements CanActivate {
 - **Performance**: Fast in-memory operations
 - **Scalable**: Works across multiple API instances
 - **Transparent**: Clear rate limit headers in responses
+
+# Integration with Current Speedydd Back Office
+> [!IMPORTANT]
+> **Direct Database Access Architecture**
+> 
+> The Speedydd API will **NOT** call any APIs to the Speedydd back office system. Instead, it will:
+> 
+> - **Direct Database Connection**: Connect directly to the back office database
+> - **Query Data Directly**: Query data from the database without API intermediaries
+> - **No API-to-API Calls**: Avoid additional network overhead and complexity
+> - **Improved Performance**: Faster data access through direct database queries
+> - **Simplified Architecture**: Reduces the number of moving parts in the system
+> 
+> This approach ensures efficient data access and reduces latency for API consumers. 
+
+## Retrieved API Key From Back Office
+
+### API Key Retrieval Flow
+
+```mermaid
+sequenceDiagram
+    participant Admin as Admin/Owner
+    participant BackOffice as Speedydd Back Office
+    participant API as Speedydd API
+
+    Note over Admin,DB: API Key Retrieval Flow
+    
+    Admin->>BackOffice: Request API Key Retrieval
+    BackOffice->>BackOffice: Authentication/ACL Check
+    Note right of BackOffice: Back office uses special API key<br/>to retrieve API key from API (1)
+    
+    BackOffice->>API: Get API Key Request <br> prams: organisation_id (mongodb ID)
+    
+    API->>API: Generate Signed API Key (api_key, org_id)
+    Note right of API: 1. Encrypt organization secret<br/>2. Sign with private key<br/>3. Create API key token
+    
+    API->>BackOffice: Return API Key
+    Note left of API: Response:<br/>- api_key: signed_token<br/>- org_id: org_12345
+    
+    BackOffice->>Admin: Return API Key
+    Note right of Admin: Response:<br/>- api_key: signed_token<br/>- org_id: org_12345X-API-Key: signed_token<br/>- Usage instructions
+```
+
+> [!IMPORTANT]
+> **Back Office Authentication Key**
+> 
+> At (1), Speedydd back office uses a **priority key** to authenticate with Speedydd API:
+> 
+> - **Private Key**: Stored securely in our cloud private key management system
+> - **Authentication Method**: Back office includes this key in request headers for every API call
+> - **Recognition**: Speedydd API recognizes and validates this key to authorize back office requests
+> - **Security**: This key is separate from organization API keys and has elevated privileges
+> - **Access Control**: Only Speedydd back office systems can use this key
+> 
+> **Example Header:**
+> ```http
+> X-BackOffice-Key: priority_key_abc123def456
+> ```
+> 
+> This ensures that only authorized back office systems can retrieve API keys for organizations. 
+
+## Speedydd API Integration
+
+### Using API Credentials
+
+Once users obtain their `api_key` and `org_id` from the back office, they can integrate with the Speedydd API using these credentials.
+
+### Authentication
+
+All API requests must include the organization credentials in the request headers:
+
+```http
+X-Org-ID: org_12345
+X-API-Key: signed_encrypted_token
+```
+
+### Example API Endpoints
+
+The Speedydd API provides various endpoints for different operations:
+
+**Base URL:** `https://api.speedydd.com/v1`
+
+**Common Endpoints:**
+- `GET /organizations` - Get organization information
+- `POST /organizations` - Create new organization
+- `GET /organizations/{id}` - Get specific organization details
+- `PUT /organizations/{id}` - Update organization information
+- `DELETE /organizations/{id}` - Delete organization
+
+### Example Integration
+
+```javascript
+// Example API call using Node.js
+const axios = require('axios');
+
+const apiClient = axios.create({
+  baseURL: 'https://api.speedydd.com/v1',
+  headers: {
+    'X-Org-ID': 'org_12345',
+    'X-API-Key': 'signed_encrypted_token',
+    'Content-Type': 'application/json'
+  }
+});
+
+// Get organization information
+async function getOrganization() {
+  try {
+    const response = await apiClient.get('/organizations');
+    console.log('Organization data:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('API Error:', error.response?.data || error.message);
+  }
+}
+
+// Create new organization
+async function createOrganization(orgData) {
+  try {
+    const response = await apiClient.post('/organizations', orgData);
+    console.log('Organization created:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('API Error:', error.response?.data || error.message);
+  }
+}
+```
+
+### Response Format
+
+All API responses follow a consistent format:
+
+**Success Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "org_12345",
+    "name": "Organization Name",
+    "created_at": "2024-01-15T10:30:00Z"
+  },
+  "message": "Operation completed successfully"
+}
+```
+
+**Error Response:**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "UNAUTHORIZED",
+    "message": "Invalid API credentials",
+    "details": "The provided API key is invalid or expired"
+  }
+}
+```
+
+### Rate Limiting
+
+API requests are subject to rate limiting based on your organization's subscription tier:
+
+- **Headers included in responses:**
+  - `X-RateLimit-Limit`: Maximum requests per day
+  - `X-RateLimit-Remaining`: Remaining requests for today
+  - `X-RateLimit-Reset`: Time when the limit resets
+
+### Error Handling
+
+Common HTTP status codes:
+- `200` - Success
+- `400` - Bad Request (invalid data)
+- `401` - Unauthorized (invalid credentials)
+- `403` - Forbidden (insufficient permissions)
+- `404` - Not Found
+- `429` - Too Many Requests (rate limit exceeded)
+- `500` - Internal Server Error
