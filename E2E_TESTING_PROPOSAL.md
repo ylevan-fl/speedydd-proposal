@@ -1417,6 +1417,125 @@ Cypress.Commands.add("trackCoverage", (feature: string) => {
 - Good documentation
 - Team training on test maintenance
 
+### 15.5. Next.js Hydration Errors
+
+**What is Hydration?**
+
+Hydration is the process where React "attaches" to the HTML that was rendered on the server (SSR - Server-Side Rendering). In Next.js, the server renders HTML, sends it to the browser, then React "hydrates" it to make it interactive.
+
+**What Causes Hydration Errors?**
+
+Hydration errors occur when the HTML rendered on the server doesn't match what React expects on the client. Common causes:
+
+1. **Server/Client Mismatch**: Different output between server and client
+
+   - Example: Server renders `new Date()` at build time, client renders current time
+   - Example: Server doesn't have access to `window` or `localStorage`, but client does
+
+2. **Third-party Scripts**: Analytics, ads, or other scripts modify DOM
+
+   - PostHog, Hotjar, HelpScout scripts can cause hydration mismatches
+
+3. **Browser Extensions**: Extensions modify DOM before React hydrates
+
+4. **Conditional Rendering Based on Client-Only Data**:
+
+   ```typescript
+   // ❌ Bad: Will cause hydration error
+   {
+     typeof window !== "undefined" && <Component />;
+   }
+
+   // ✅ Good: Use useEffect or suppressHydrationWarning
+   ```
+
+**Why This Affects Cypress Tests:**
+
+- Cypress runs in a real browser, so it sees hydration errors
+- These errors are often non-critical (app still works)
+- But Cypress will fail tests if uncaught exceptions occur
+- Hydration errors are common in Next.js apps and shouldn't break E2E tests
+
+**Current Solution in `cypress/support/e2e.ts`:**
+
+```typescript
+// Handle uncaught exceptions from Next.js hydration errors
+Cypress.on("uncaught:exception", (err, runnable) => {
+  // Ignore hydration errors from Next.js
+  if (
+    err.message.includes("Hydration failed") ||
+    err.message.includes("hydration") ||
+    err.message.includes("Minified React error") ||
+    err.message.includes("Unknown root exit status")
+  ) {
+    return false; // Prevent Cypress from failing the test
+  }
+
+  // Ignore PostHog and other analytics errors
+  if (
+    err.message.includes("posthog") ||
+    err.message.includes("PostHog") ||
+    err.message.includes("analytics")
+  ) {
+    return false;
+  }
+
+  // Let other errors fail the test
+  return true;
+});
+```
+
+**How It Works:**
+
+1. Cypress catches all uncaught exceptions
+2. We check if it's a hydration-related error
+3. If yes, return `false` to ignore it (test continues)
+4. If no, return `true` to fail the test (normal behavior)
+
+**Best Practices:**
+
+1. **Fix Root Cause**: While we ignore hydration errors in tests, developers should still fix them
+
+   - Use `suppressHydrationWarning` for known safe mismatches
+   - Use `useEffect` for client-only rendering
+   - Ensure server and client render the same HTML
+
+2. **Monitor Hydration Errors**: Don't ignore them completely
+
+   - Log hydration errors for debugging
+   - Track them in error monitoring (Sentry, etc.)
+   - Fix critical hydration issues
+
+3. **Test Configuration**: Keep the handler in `e2e.ts`
+   - This is already configured in the project
+   - No additional setup needed
+
+**Example of Safe Hydration Handling in Code:**
+
+```typescript
+// In Next.js components
+<div suppressHydrationWarning>
+  {typeof window !== "undefined" && <ClientOnlyComponent />}
+</div>;
+
+// Or use useEffect
+useEffect(() => {
+  // Client-only code here
+}, []);
+```
+
+**When to Investigate Hydration Errors:**
+
+- If tests are failing due to hydration errors (handler not working)
+- If hydration errors are causing actual UI bugs
+- If hydration errors are frequent and affecting user experience
+
+**When to Ignore:**
+
+- Non-critical hydration warnings (analytics, third-party scripts)
+- Known safe mismatches (theme detection, feature flags)
+- Development-only warnings that don't affect production
+
 ---
 
 ## 16. Timeline & Milestones
